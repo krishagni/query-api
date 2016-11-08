@@ -1,7 +1,12 @@
 package com.krishagni.query.services.impl;
 
 import java.io.InputStream;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -10,11 +15,18 @@ import org.apache.commons.logging.LogFactory;
 import org.springframework.beans.factory.InitializingBean;
 
 import com.krishagni.commons.errors.AppException;
+import com.krishagni.query.domain.Filter;
+import com.krishagni.query.domain.QueryDef;
 import com.krishagni.query.errors.QueryErrorCode;
 import com.krishagni.query.events.ExecuteQueryOp;
+import com.krishagni.query.events.FacetDetail;
 import com.krishagni.query.events.QueryExecResult;
 import com.krishagni.query.services.QueryService;
 
+import edu.common.dynamicextensions.domain.nui.Container;
+import edu.common.dynamicextensions.domain.nui.Control;
+import edu.common.dynamicextensions.domain.nui.DataType;
+import edu.common.dynamicextensions.domain.nui.LookupControl;
 import edu.common.dynamicextensions.query.PathConfig;
 import edu.common.dynamicextensions.query.Query;
 import edu.common.dynamicextensions.query.QueryException;
@@ -87,6 +99,21 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 	}
 
 	@Override
+	public List<FacetDetail> getFacets(QueryDef query) {
+		Map<String, Container> formCache = new HashMap<>();
+		try {
+			return Arrays.stream(query.getFilters())
+				.filter(filter -> filter.isParameterized() && filter.getOp() != null)
+				.map(filter -> getFacet(formCache, filter))
+				.collect(Collectors.toList());
+		} catch (Exception e) {
+			return AppException.raiseError(e);
+		} finally {
+			formCache.clear();
+		}
+	}
+
+	@Override
 	public void afterPropertiesSet() throws Exception {
 		InputStream in = null;
 		try {
@@ -136,5 +163,83 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 			.timeFormat(timeFmt);
 		query.compile(op.getDrivingForm(), op.getAql(), op.getRestriction());
 		return query;
+	}
+
+	private FacetDetail getFacet(Map<String, Container> formCache, Filter filter) {
+		FacetDetail facet = new FacetDetail();
+		Integer facetId = filter.getId();
+		facet.setId(facetId.longValue());
+		facet.setName(facetId.toString());
+
+		DataType dataType = null;
+		if (StringUtils.isNotBlank(filter.getExpr())) {
+			dataType = DataType.INTEGER;
+			facet.setCaption(filter.getDesc());
+		} else {
+			Control field = getField(formCache, filter.getField());
+			if (field instanceof LookupControl) {
+				dataType = ((LookupControl) field).getValueType();
+			} else {
+				dataType = field.getDataType();
+			}
+			facet.setCaption(field.getCaption());
+		}
+
+		facet.setDataType(dataType.name());
+		switch (dataType) {
+			case INTEGER:
+			case FLOAT:
+			case DATE:
+				facet.setSearchType("RANGE");
+				break;
+
+			case STRING:
+				facet.setSearchType("EQUALS");
+				facet.setValues(getPreConfiguredValues(filter));
+				break;
+		}
+
+		return facet;
+	}
+
+	private Control getField(Map<String, Container> formCache, String fieldExpr) {
+		String[] fieldParts = fieldExpr.split("\\.");
+
+		String formName, fieldName;
+		if (fieldParts[1].equals("extensions") || fieldParts[1].equals("customFields")) {
+			if (fieldParts.length < 4) { // <form>.[extensions|customFields].<form>.<fields...>
+				//
+				// should never occur
+				//
+				throw new RuntimeException("Invalid field expression: " + fieldExpr);
+			}
+
+			formName = fieldParts[2];
+			fieldName = StringUtils.join(fieldParts, ".", 3, fieldParts.length);
+		} else {
+			formName = fieldParts[0];
+			fieldName = StringUtils.join(fieldParts, ".", 1, fieldParts.length);
+		}
+
+		Container form = formCache.get(formName);
+		if (form == null) {
+			form = Container.getContainer(formName);
+			if (form == null) {
+				throw new RuntimeException("Error loading form : " + formName);
+			}
+
+			formCache.put(formName, form);
+		}
+
+		return form.getControl(fieldName, "\\.");
+	}
+
+	private List<Object> getPreConfiguredValues(Filter filter) {
+		String[] values = filter.getValues();
+		if (values == null || values.length == 0 || (values.length == 1 && values[0] == null)) {
+			return null;
+		}
+
+		return Arrays.asList(values);
 	}
 }

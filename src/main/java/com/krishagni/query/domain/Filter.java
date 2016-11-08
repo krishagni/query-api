@@ -36,7 +36,7 @@ public class Filter {
 		public boolean isUnary() {
 			return this == EXISTS || this == NOT_EXISTS || this == ANY;
 		}
-	};
+	}
 
 	private int id;
 
