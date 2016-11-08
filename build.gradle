@@ -1,0 +1,31 @@
+import org.apache.tools.ant.filters.ReplaceTokens
+import org.apache.tools.ant.taskdefs.condition.Os
+import static groovy.io.FileType.FILES
+
+apply plugin: 'java'
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+
+jar {
+  baseName = 'krishagni-query-utils'
+  version =  '1.0.0'
+}
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+configurations.all {
+  transitive = false
+}
+
+dependencies {
+  compile fileTree(dir: 'lib', include: ['DynamicExtensions.jar'])
+
+  compile group: 'org.apache.commons', name: 'commons-lang3', version:'3.4'
+  compile group: 'com.fasterxml.jackson.core', name: 'jackson-core', version:'2.5.3'
+  compile group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version:'2.5.3'
+}
