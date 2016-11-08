@@ -1,4 +1,4 @@
-package com.krishagni.query;
+package com.krishagni.query.domain;
 
 import java.util.List;
 

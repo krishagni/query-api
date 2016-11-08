@@ -1,4 +1,4 @@
-package com.krishagni.query;
+package com.krishagni.query.domain;
 
 public class QueryDef {
 	private String drivingForm;
