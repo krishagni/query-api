@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.logging.Log;
@@ -19,7 +20,7 @@ import com.krishagni.query.domain.Filter;
 import com.krishagni.query.domain.QueryDef;
 import com.krishagni.query.errors.QueryErrorCode;
 import com.krishagni.query.events.ExecuteQueryOp;
-import com.krishagni.query.events.FacetDetail;
+import com.krishagni.query.events.FilterDetail;
 import com.krishagni.query.events.QueryExecResult;
 import com.krishagni.query.services.QueryService;
 
@@ -99,7 +100,7 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 	}
 
 	@Override
-	public List<FacetDetail> getFacets(QueryDef query) {
+	public List<FilterDetail> getParameterisedFilters(QueryDef query) {
 		Map<String, Container> formCache = new HashMap<>();
 		try {
 			return Arrays.stream(query.getFilters())
@@ -110,6 +111,22 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 			return AppException.raiseError(e);
 		} finally {
 			formCache.clear();
+		}
+	}
+
+	@Override
+	public void bindFilterValues(QueryDef query, List<FilterDetail> criteria) {
+		Map<Integer, FilterDetail> criteriaMap = criteria.stream().collect(Collectors.toMap(f -> f.getId(), f -> f));
+
+		for (Filter filter : query.getFilters()) {
+			if (!filter.isParameterized()) {
+				continue;
+			}
+
+			FilterDetail criterion = criteriaMap.get(filter.getId());
+			if (criterion != null) {
+				bindFilterValue(filter, criterion);
+			}
 		}
 	}
 
@@ -165,13 +182,13 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 		return query;
 	}
 
-	private FacetDetail getFacet(Map<String, Container> formCache, Filter filter) {
-		FacetDetail facet = new FacetDetail();
+	private FilterDetail getFacet(Map<String, Container> formCache, Filter filter) {
+		FilterDetail facet = new FilterDetail();
 		Integer facetId = filter.getId();
-		facet.setId(facetId.longValue());
+		facet.setId(facetId);
 		facet.setName(facetId.toString());
 
-		DataType dataType = null;
+		DataType dataType;
 		if (StringUtils.isNotBlank(filter.getExpr())) {
 			dataType = DataType.INTEGER;
 			facet.setCaption(filter.getDesc());
@@ -240,6 +257,73 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 			return null;
 		}
 
-		return Arrays.asList(values);
+		return Arrays.stream(values).collect(Collectors.toList());
+	}
+
+	private void bindFilterValue(Filter filter, FilterDetail criterion) {
+		if (StringUtils.isBlank(criterion.getSearchType()) || CollectionUtils.isEmpty(criterion.getValues())) {
+			return;
+		}
+
+		if ("RANGE".equals(criterion.getSearchType())) {
+			bindRangeCondition(filter, criterion);
+		} else if ("EQUALS".equals(criterion.getSearchType())) {
+			bindEqualsCondition(filter, criterion);
+		}
+	}
+
+	private void bindRangeCondition(Filter filter, FilterDetail criterion) {
+		if (StringUtils.isBlank(filter.getExpr())) {
+			bindFieldRangeCondition(filter, criterion);
+		} else {
+			bindExprRangeCondition(filter, criterion);
+		}
+	}
+
+	private void bindFieldRangeCondition(Filter filter, FilterDetail criterion) {
+		Object minValue = criterion.getValues().get(0);
+		Object maxValue = criterion.getValues().get(1);
+
+		if (minValue == null && maxValue != null) {
+			filter.setOp(Filter.Op.LE);
+			filter.setValues(new String[] {maxValue.toString()});
+		} else if (minValue != null && maxValue == null) {
+			filter.setOp(Filter.Op.GE);
+			filter.setValues(new String[] {minValue.toString()});
+		} else if (minValue != null && maxValue != null) {
+			filter.setOp(Filter.Op.BETWEEN);
+			filter.setValues(new String[] {minValue.toString(), maxValue.toString()});
+		}
+	}
+
+	private void bindExprRangeCondition(Filter filter, FilterDetail criterion) {
+		Object minValue = criterion.getValues().get(0);
+		Object maxValue = criterion.getValues().get(1);
+
+		String expr = filter.getExpr();
+		if (minValue == null && maxValue != null) {
+			filter.setExpr(getLhs(expr) + " <= " + maxValue.toString());
+		} else if (minValue != null && maxValue == null) {
+			filter.setExpr(getLhs(expr) + " >= " + minValue.toString());
+		} else if (minValue != null && maxValue != null) {
+			filter.setExpr(getLhs(expr) + " between (" + minValue.toString() + ", " + maxValue.toString() + ")");
+		}
+	}
+
+	private String getLhs(String expr) {
+		String[] lhsRhs = expr.split("[<=>!]|\\sany\\s*$|\\sexists\\s*$|\\snot exists\\s*$|\\sbetween\\s");
+		return lhsRhs[0];
+	}
+
+	private void bindEqualsCondition(Filter filter, FilterDetail criterion) {
+		filter.setOp(Filter.Op.IN);
+
+		String[] values = new String[criterion.getValues().size()];
+		int idx = 0;
+		for (Object val : criterion.getValues()) {
+			values[idx++] = val.toString();
+		}
+
+		filter.setValues(values);
 	}
 }

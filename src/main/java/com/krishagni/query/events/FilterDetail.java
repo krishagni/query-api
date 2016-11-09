@@ -4,8 +4,8 @@ import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
-public class FacetDetail {
-	private Long id;
+public class FilterDetail {
+	private Integer id;
 
 	private String name;
 
@@ -19,11 +19,11 @@ public class FacetDetail {
 
 	private String searchTerm;
 
-	public Long getId() {
+	public Integer getId() {
 		return id;
 	}
 
-	public void setId(Long id) {
+	public void setId(Integer id) {
 		this.id = id;
 	}
 
