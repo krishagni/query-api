@@ -17,8 +17,6 @@ public class FilterDetail {
 
 	private List<Object> values;
 
-	private String searchTerm;
-
 	public Integer getId() {
 		return id;
 	}
@@ -65,14 +63,5 @@ public class FilterDetail {
 
 	public void setValues(List<Object> values) {
 		this.values = values;
-	}
-
-	@JsonIgnore
-	public String getSearchTerm() {
-		return searchTerm;
-	}
-
-	public void setSearchTerm(String searchTerm) {
-		this.searchTerm = searchTerm;
 	}
 }

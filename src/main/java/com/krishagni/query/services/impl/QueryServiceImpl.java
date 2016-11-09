@@ -1,10 +1,13 @@
 package com.krishagni.query.services.impl;
 
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -20,6 +23,7 @@ import com.krishagni.query.domain.Filter;
 import com.krishagni.query.domain.QueryDef;
 import com.krishagni.query.errors.QueryErrorCode;
 import com.krishagni.query.events.ExecuteQueryOp;
+import com.krishagni.query.events.FieldDetail;
 import com.krishagni.query.events.FilterDetail;
 import com.krishagni.query.events.QueryExecResult;
 import com.krishagni.query.services.QueryService;
@@ -128,6 +132,78 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 				bindFilterValue(filter, criterion);
 			}
 		}
+	}
+
+	@Override
+	public FieldDetail getFieldValues(String fqn, String searchTerm, String restriction) {
+		String[] fieldParts = fqn.split("\\.");
+
+		String formName = null, fieldName = null;
+		if (fieldParts[1].equals("extensions") || fieldParts[1].equals("customFields")) {
+			if (fieldParts.length < 4) {
+				throw new IllegalArgumentException("Invalid expression: " + fqn);
+			}
+
+			formName = fieldParts[2];
+			fieldName = StringUtils.join(fieldParts, ".", 3, fieldParts.length);
+		} else {
+			formName = fieldParts[0];
+			fieldName = StringUtils.join(fieldParts, ".", 1, fieldParts.length);
+		}
+
+		Container form = Container.getContainer(formName);
+		if (form == null) {
+			throw new IllegalArgumentException("Invalid expression: " + fqn);
+		}
+
+		Control field = form.getControlByUdn(fieldName, "\\.");
+		if (field == null) {
+			throw new IllegalArgumentException("Invalid expression: " + fqn);
+		}
+
+		String aqlFmt = "select distinct %s where %s %s limit 0, 500";
+		List<Object> aqlFmtArgs = new ArrayList<>();
+		aqlFmtArgs.add(fqn);
+		aqlFmtArgs.add(fqn);
+
+		if (StringUtils.isNotBlank(searchTerm)) {
+			switch (field.getDataType()) {
+				case STRING:
+					aqlFmtArgs.add("contains \"" + searchTerm.trim() + "\"");
+					break;
+
+				case DATE:
+					aqlFmtArgs.add("= \"" + searchTerm.trim() + "\"");
+					break;
+
+				default:
+					aqlFmtArgs.add("= " + searchTerm.trim());
+					break;
+			}
+		} else {
+			aqlFmtArgs.add("exists");
+		}
+
+		String aql = String.format(aqlFmt, aqlFmtArgs.toArray());
+		Query query = Query.createQuery();
+		query.wideRowMode(WideRowMode.OFF).compile(fieldParts[0], aql, restriction);
+		QueryResponse queryResp = query.getData();
+
+		QueryResultData queryResult = queryResp.getResultData();
+
+		Collection<Object> values = new TreeSet<>();
+		for (Object[] row : queryResult.getRows()) {
+			if (row[0] != null && !row[0].toString().isEmpty()) {
+				values.add(row[0]);
+			}
+		}
+
+		String[] columnLabels = queryResp.getResultData().getColumnLabels()[0].split("#");
+		FieldDetail result = new FieldDetail();
+		result.setFqn(fqn);
+		result.setCaption(columnLabels[columnLabels.length - 1]);
+		result.setValues(new ArrayList<>(values));
+		return result;
 	}
 
 	@Override
