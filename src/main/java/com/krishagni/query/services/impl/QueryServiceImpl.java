@@ -324,7 +324,7 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 			formCache.put(formName, form);
 		}
 
-		return form.getControl(fieldName, "\\.");
+		return form.getControlByUdn(fieldName, "\\.");
 	}
 
 	private List<Object> getPreConfiguredValues(Filter filter) {
