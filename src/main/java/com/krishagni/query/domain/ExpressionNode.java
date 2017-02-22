@@ -17,7 +17,7 @@ public class ExpressionNode {
 
 		private String symbol;
 
-		private LogicalOp(String symbol) {
+		LogicalOp(String symbol) {
 			this.symbol = symbol;
 		}
 

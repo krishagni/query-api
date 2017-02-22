@@ -1,6 +1,7 @@
 package com.krishagni.query.services.impl;
 
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -9,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.apache.commons.collections.CollectionUtils;
@@ -26,7 +29,8 @@ import com.krishagni.query.events.ExecuteQueryOp;
 import com.krishagni.query.events.FieldDetail;
 import com.krishagni.query.events.FilterDetail;
 import com.krishagni.query.events.QueryExecResult;
-import com.krishagni.query.services.QueryService;
+import com.krishagni.query.services.QueryExecutor;
+import com.krishagni.query.services.QueryExecutorConfig;
 
 import edu.common.dynamicextensions.domain.nui.Container;
 import edu.common.dynamicextensions.domain.nui.Control;
@@ -37,19 +41,15 @@ import edu.common.dynamicextensions.query.Query;
 import edu.common.dynamicextensions.query.QueryException;
 import edu.common.dynamicextensions.query.QueryParserException;
 import edu.common.dynamicextensions.query.QueryResponse;
+import edu.common.dynamicextensions.query.QueryResultCsvExporter;
 import edu.common.dynamicextensions.query.QueryResultData;
+import edu.common.dynamicextensions.query.QueryResultExporter;
 import edu.common.dynamicextensions.query.WideRowMode;
 
-public class QueryServiceImpl implements QueryService, InitializingBean {
-	private static final Log logger = LogFactory.getLog(QueryServiceImpl.class);
+public class QueryExecutorImpl implements QueryExecutor, InitializingBean {
+	private static final Log logger = LogFactory.getLog(QueryExecutorImpl.class);
 
-	private int maxConcurrentQueries = 10;
-
-	private String queryPathsCfg;
-
-	private String dateFmt = "dd-MM-yyyy";
-
-	private String timeFmt = "HH:mm";
+	private QueryExecutorConfig config;
 
 	private AtomicInteger concurrentQueriesCnt = new AtomicInteger(0);
 
@@ -66,6 +66,7 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 			QueryResponse resp = query.getData();
 
 			queryResult = resp.getResultData();
+			queryResult.setScreener(config.getScreener(query));
 
 			Integer[] indices = null;
 			if (op.getIndexOf() != null && !op.getIndexOf().isEmpty()) {
@@ -73,11 +74,11 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 			}
 
 			return new QueryExecResult()
-					.setColumnLabels(queryResult.getColumnLabels())
-					.setColumnUrls(queryResult.getColumnUrls())
-					.setRows(queryResult.getStringifiedRows())
-					.setDbRowsCount(queryResult.getDbRowsCount())
-					.setColumnIndices(indices);
+				.setColumnLabels(queryResult.getColumnLabels())
+				.setColumnUrls(queryResult.getColumnUrls())
+				.setRows(queryResult.getStringifiedRows())
+				.setDbRowsCount(queryResult.getDbRowsCount())
+				.setColumnIndices(indices);
 		} catch (QueryParserException qpe) {
 			throw AppException.userError(QueryErrorCode.MALFORMED, qpe.getMessage());
 		} catch (QueryException qe) {
@@ -104,6 +105,22 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 	}
 
 	@Override
+	public void exportData(ExecuteQueryOp op, OutputStream out, char fieldSeparator, Consumer<Object> onFinish) {
+		QueryResultExporter exporter = new QueryResultCsvExporter(fieldSeparator);
+		try {
+			Query query = getQuery(op);
+			QueryResponse resp = exporter.export(out, query, config.getScreener(query));
+			// insertAuditLog(user, opDetail, resp);
+			onFinish.accept(true);
+		} catch (Exception e) {
+			logger.error("Error exporting query data", e);
+			onFinish.accept(e);
+		} finally {
+			IOUtils.closeQuietly(out);
+		}
+	}
+
+	@Override
 	public List<FilterDetail> getParameterisedFilters(QueryDef query) {
 		Map<String, Container> formCache = new HashMap<>();
 		try {
@@ -119,23 +136,12 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 	}
 
 	@Override
-	public void bindFilterValues(QueryDef query, List<FilterDetail> criteria) {
-		Map<Integer, FilterDetail> criteriaMap = criteria.stream().collect(Collectors.toMap(f -> f.getId(), f -> f));
-
-		for (Filter filter : query.getFilters()) {
-			if (!filter.isParameterized()) {
-				continue;
-			}
-
-			FilterDetail criterion = criteriaMap.get(filter.getId());
-			if (criterion != null) {
-				bindFilterValue(filter, criterion);
-			}
-		}
+	public FieldDetail getFieldValues(String fqn, String searchTerm, String restriction) {
+		return getFieldValues(fqn, searchTerm, restriction, null);
 	}
 
 	@Override
-	public FieldDetail getFieldValues(String fqn, String searchTerm, String restriction) {
+	public FieldDetail getFieldValues(String fqn, String searchTerm, String restriction, Function<Control, String> screeningFieldsFn) {
 		String[] fieldParts = fqn.split("\\.");
 
 		String formName = null, fieldName = null;
@@ -161,8 +167,14 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 			throw new IllegalArgumentException("Invalid expression: " + fqn);
 		}
 
-		String aqlFmt = "select distinct %s where %s %s limit 0, 500";
+		String aqlFmt = "select distinct %s %s where %s %s limit 0, 500";
 		List<Object> aqlFmtArgs = new ArrayList<>();
+		if (screeningFieldsFn == null) {
+			aqlFmtArgs.add("");
+		} else {
+			aqlFmtArgs.add(screeningFieldsFn.apply(field));
+		}
+
 		aqlFmtArgs.add(fqn);
 		aqlFmtArgs.add(fqn);
 
@@ -190,6 +202,7 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 		QueryResponse queryResp = query.getData();
 
 		QueryResultData queryResult = queryResp.getResultData();
+		queryResult.setScreener(config.getScreener(query));
 
 		Collection<Object> values = new TreeSet<>();
 		for (Object[] row : queryResult.getRows()) {
@@ -207,32 +220,59 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 	}
 
 	@Override
+	public void bindFilterValues(QueryDef query, List<FilterDetail> criteria) {
+		Map<Integer, FilterDetail> criteriaMap = criteria.stream().collect(Collectors.toMap(f -> f.getId(), f -> f));
+
+		for (Filter filter : query.getFilters()) {
+			if (!filter.isParameterized()) {
+				continue;
+			}
+
+			FilterDetail criterion = criteriaMap.get(filter.getId());
+			if (criterion != null) {
+				bindFilterValue(filter, criterion);
+			}
+		}
+	}
+
+	@Override
+	public QueryExecutorConfig getConfig() {
+		return config;
+	}
+
+	public void setConfig(QueryExecutorConfig config) {
+		this.config = config;
+	}
+
+	@Override
 	public void afterPropertiesSet() throws Exception {
 		InputStream in = null;
 		try {
-			if (StringUtils.isBlank(queryPathsCfg)) {
+			if (StringUtils.isBlank(config.getPathsConfig())) {
 				return;
 			}
 
-			in = Thread.currentThread().getContextClassLoader().getResourceAsStream(queryPathsCfg);
+			in = Thread.currentThread().getContextClassLoader().getResourceAsStream(config.getPathsConfig());
 			PathConfig.initialize(in);
 		} finally {
 			IOUtils.closeQuietly(in);
 		}
 	}
 
-	public void setMaxConcurrentQueries(int maxConcurrentQueries) {
-		this.maxConcurrentQueries = maxConcurrentQueries;
-	}
-
-	public void setQueryPathsCfg(String queryPathsCfg) {
-		this.queryPathsCfg = queryPathsCfg;
+	private Query getQuery(ExecuteQueryOp op) {
+		Query query = Query.createQuery()
+			.wideRowMode(WideRowMode.valueOf(op.getWideRowMode()))
+			.ic(true)
+			.dateFormat(config.getDateFormat())
+			.timeFormat(config.getTimeFormat());
+		query.compile(op.getDrivingForm(), op.getAql(), op.getRestriction());
+		return query;
 	}
 
 	private boolean incConcurrentQueriesCnt() {
 		while (true) {
 			int current = concurrentQueriesCnt.get();
-			if (current >= maxConcurrentQueries) {
+			if (current >= config.getMaxConcurrentQueries()) {
 				throw AppException.userError(QueryErrorCode.TOO_BUSY);
 			}
 
@@ -246,16 +286,6 @@ public class QueryServiceImpl implements QueryService, InitializingBean {
 
 	private int decConcurrentQueriesCnt() {
 		return concurrentQueriesCnt.decrementAndGet();
-	}
-
-	private Query getQuery(ExecuteQueryOp op) {
-		Query query = Query.createQuery()
-			.wideRowMode(WideRowMode.valueOf(op.getWideRowMode()))
-			.ic(true)
-			.dateFormat(dateFmt)
-			.timeFormat(timeFmt);
-		query.compile(op.getDrivingForm(), op.getAql(), op.getRestriction());
-		return query;
 	}
 
 	private FilterDetail getFacet(Map<String, Container> formCache, Filter filter) {
