@@ -2,6 +2,7 @@ package com.krishagni.query.services;
 
 import java.io.OutputStream;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -22,9 +23,7 @@ public interface QueryExecutor {
 
 	void bindFilterValues(QueryDef query, List<FilterDetail> criteria);
 
-	FieldDetail getFieldValues(String fqn, String searchTerm, String restriction);
-
-	FieldDetail getFieldValues(String fqn, String searchTerm, String restriction, Function<Control, String> screeningFieldsFn);
+	FieldDetail getFieldValues(String fqn, String searchTerm, Map<String, Object> appData);
 
 	QueryExecutorConfig getConfig();
 }

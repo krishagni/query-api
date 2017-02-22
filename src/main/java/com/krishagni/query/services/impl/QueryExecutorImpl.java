@@ -136,71 +136,21 @@ public class QueryExecutorImpl implements QueryExecutor, InitializingBean {
 	}
 
 	@Override
-	public FieldDetail getFieldValues(String fqn, String searchTerm, String restriction) {
-		return getFieldValues(fqn, searchTerm, restriction, null);
-	}
-
-	@Override
-	public FieldDetail getFieldValues(String fqn, String searchTerm, String restriction, Function<Control, String> screeningFieldsFn) {
+	public FieldDetail getFieldValues(String fqn, String searchTerm, Map<String, Object> appData) {
 		String[] fieldParts = fqn.split("\\.");
 
-		String formName = null, fieldName = null;
-		if (fieldParts[1].equals("extensions") || fieldParts[1].equals("customFields")) {
-			if (fieldParts.length < 4) {
-				throw new IllegalArgumentException("Invalid expression: " + fqn);
-			}
+		String aqlFmt = "select distinct %s where %s %s limit 0, 500";
+		String condition = StringUtils.isNotBlank(searchTerm) ? "contains \"" + searchTerm.trim() + "\"" : "exists";
 
-			formName = fieldParts[2];
-			fieldName = StringUtils.join(fieldParts, ".", 3, fieldParts.length);
-		} else {
-			formName = fieldParts[0];
-			fieldName = StringUtils.join(fieldParts, ".", 1, fieldParts.length);
-		}
+		ExecuteQueryOp op = new ExecuteQueryOp();
+		op.setAppData(appData);
+		op.setAql(String.format(aqlFmt, fqn, fqn, condition));
+		op.setDrivingForm(fieldParts[0]);
+		op.setWideRowMode(WideRowMode.OFF.name());
+		op.setRunType("Data");
 
-		Container form = Container.getContainer(formName);
-		if (form == null) {
-			throw new IllegalArgumentException("Invalid expression: " + fqn);
-		}
-
-		Control field = form.getControlByUdn(fieldName, "\\.");
-		if (field == null) {
-			throw new IllegalArgumentException("Invalid expression: " + fqn);
-		}
-
-		String aqlFmt = "select distinct %s %s where %s %s limit 0, 500";
-		List<Object> aqlFmtArgs = new ArrayList<>();
-		if (screeningFieldsFn == null) {
-			aqlFmtArgs.add("");
-		} else {
-			aqlFmtArgs.add(screeningFieldsFn.apply(field));
-		}
-
-		aqlFmtArgs.add(fqn);
-		aqlFmtArgs.add(fqn);
-
-		if (StringUtils.isNotBlank(searchTerm)) {
-			switch (field.getDataType()) {
-				case STRING:
-					aqlFmtArgs.add("contains \"" + searchTerm.trim() + "\"");
-					break;
-
-				case DATE:
-					aqlFmtArgs.add("= \"" + searchTerm.trim() + "\"");
-					break;
-
-				default:
-					aqlFmtArgs.add("= " + searchTerm.trim());
-					break;
-			}
-		} else {
-			aqlFmtArgs.add("exists");
-		}
-
-		String aql = String.format(aqlFmt, aqlFmtArgs.toArray());
-		Query query = Query.createQuery();
-		query.wideRowMode(WideRowMode.OFF).compile(fieldParts[0], aql, restriction);
+		Query query = getQuery(op);
 		QueryResponse queryResp = query.getData();
-
 		QueryResultData queryResult = queryResp.getResultData();
 		queryResult.setScreener(config.getScreener(query));
 
@@ -260,6 +210,8 @@ public class QueryExecutorImpl implements QueryExecutor, InitializingBean {
 	}
 
 	private Query getQuery(ExecuteQueryOp op) {
+		config.addRestrictions(op);
+
 		Query query = Query.createQuery()
 			.wideRowMode(WideRowMode.valueOf(op.getWideRowMode()))
 			.ic(true)
