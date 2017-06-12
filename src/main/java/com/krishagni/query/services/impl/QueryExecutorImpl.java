@@ -142,13 +142,17 @@ public class QueryExecutorImpl implements QueryExecutor, InitializingBean {
 		String aqlFmt = "select distinct %s where %s %s limit 0, 500";
 		String condition = StringUtils.isNotBlank(searchTerm) ? "contains \"" + searchTerm.trim() + "\"" : "exists";
 
+		String drivingForm = (String)appData.get("drivingForm");
+		if (StringUtils.isBlank(drivingForm)) {
+			drivingForm = fieldParts[0];
+			appData.put("drivingForm", drivingForm);
+		}
+
 		ExecuteQueryOp op = new ExecuteQueryOp();
 		op.setAppData(appData);
 		op.setAql(String.format(aqlFmt, fqn, fqn, condition));
-		op.setDrivingForm(fieldParts[0]);
 		op.setWideRowMode(WideRowMode.OFF.name());
 		op.setRunType("Data");
-
 		Query query = getQuery(op);
 		QueryResponse queryResp = query.getData();
 		QueryResultData queryResult = queryResp.getResultData();
@@ -212,11 +216,18 @@ public class QueryExecutorImpl implements QueryExecutor, InitializingBean {
 	private Query getQuery(ExecuteQueryOp op) {
 		config.addRestrictions(op);
 
+		Map<String, Object> appData = op.getAppData();
+		String drivingForm = op.getDrivingForm();
+		if (StringUtils.isBlank(drivingForm)) {
+			op.setDrivingForm((String) appData.get("drivingForm"));
+		}
+
 		Query query = Query.createQuery()
 			.wideRowMode(WideRowMode.valueOf(op.getWideRowMode()))
 			.ic(true)
 			.dateFormat(config.getDateFormat())
-			.timeFormat(config.getTimeFormat());
+			.timeFormat(config.getTimeFormat())
+			.pathConfig((PathConfig) appData.get("pathConfig"));
 		query.compile(op.getDrivingForm(), op.getAql(), op.getRestriction());
 		return query;
 	}
@@ -291,6 +302,12 @@ public class QueryExecutorImpl implements QueryExecutor, InitializingBean {
 
 			formName = fieldParts[2];
 			fieldName = StringUtils.join(fieldParts, ".", 3, fieldParts.length);
+		} else if (fieldParts[1].equals("dynaEntities")) {
+			if (fieldParts.length < 4) {
+				throw new RuntimeException("Invalid field expression: " + fieldExpr);
+			}
+
+			return getField(formCache, StringUtils.join(fieldParts, ".", 2, fieldParts.length));
 		} else {
 			formName = fieldParts[0];
 			fieldName = StringUtils.join(fieldParts, ".", 1, fieldParts.length);

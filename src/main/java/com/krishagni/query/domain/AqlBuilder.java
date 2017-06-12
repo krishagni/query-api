@@ -28,7 +28,7 @@ public class AqlBuilder {
 	}
 
 	public String getQuery(Object[] selectList, Filter[] filters, Filter[] conjunctionFilters, ExpressionNode[] queryExprNodes) {
-		Map<Integer, Filter> filterMap = new HashMap<Integer, Filter>();
+		Map<Integer, Filter> filterMap = new HashMap<>();
 		for (Filter filter : filters) {
 			filterMap.put(filter.getId(), filter);
 		}
@@ -187,6 +187,24 @@ public class AqlBuilder {
 
 			form = getContainer(fieldParts[2]);
 			ctrlName = StringUtils.join(fieldParts, ".", 3, fieldParts.length);
+		} else if (fieldParts[1].equals("dynaEntities")) {
+			//
+			// traverse to the last form in the dynaEntities chain (f3.field1)
+			// f1.dynaEntities.f2.dynaEntities.f3.field1
+			//
+			int idx = 1;
+			for (int i = 2; i < fieldParts.length; ++i) {
+				if (fieldParts[i].equals("dynaEntities")) {
+					idx = i;
+				}
+			}
+
+			if (fieldParts.length < (idx + 3)) {
+				return "";
+			}
+
+			form = Container.getContainer(fieldParts[idx + 1]);
+			ctrlName = StringUtils.join(fieldParts, ".", idx + 2, fieldParts.length);
 		} else {
 			form = getContainer(fieldParts[0]);
 			ctrlName = StringUtils.join(fieldParts, ".", 1, fieldParts.length);
